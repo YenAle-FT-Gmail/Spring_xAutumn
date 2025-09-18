@@ -1,0 +1,170 @@
+import {
+  AttachBranch,
+  AttachConfig,
+  BillingInterval,
+  FullProduct,
+  FreeTrial,
+} from "@autumn/shared";
+import { getOptions } from "@/internal/api/entitled/checkUtils.js";
+import { getItemsForNewProduct } from "@/internal/invoices/previewItemUtils/getItemsForNewProduct.js";
+import { AttachParams } from "../../cusProducts/AttachParams.js";
+import {
+  attachParamsToProduct,
+  getCustomerSub,
+} from "../attachUtils/convertAttachParams.js";
+import { mapToProductItems } from "@/internal/products/productV2Utils.js";
+import { getNextStartOfMonthUnix } from "@/internal/products/prices/billingIntervalUtils.js";
+import { freeTrialToStripeTimestamp } from "@/internal/products/free-trials/freeTrialUtils.js";
+import { getLargestInterval } from "@/internal/products/prices/priceUtils/priceIntervalUtils.js";
+import { isTrialing } from "@autumn/shared";
+import { getAlignedUnix } from "@/internal/products/prices/billingIntervalUtils2.js";
+import { formatUnixToDate } from "@/utils/genUtils.js";
+
+const getNextCycleItems = async ({
+  newProduct,
+  attachParams,
+  anchor,
+  branch,
+  withPrepaid,
+  logger,
+  config,
+  trialEnds,
+}: {
+  newProduct: FullProduct;
+  attachParams: AttachParams;
+  anchor?: number;
+  branch: AttachBranch;
+  withPrepaid?: boolean;
+  logger: any;
+  config: AttachConfig;
+  trialEnds?: number | null;
+}) => {
+  // 2. If free trial
+  let nextCycleAt = undefined;
+  if (attachParams.freeTrial) {
+    if (trialEnds) {
+      nextCycleAt = trialEnds;
+    } else {
+      nextCycleAt =
+        freeTrialToStripeTimestamp({
+          freeTrial: attachParams.freeTrial,
+          now: attachParams.now,
+        })! * 1000;
+    }
+  } else if (branch != AttachBranch.OneOff && anchor) {
+    // Yearly one
+    const largestInterval = getLargestInterval({ prices: newProduct.prices });
+    if (largestInterval) {
+      nextCycleAt = getAlignedUnix({
+        anchor,
+        intervalConfig: largestInterval,
+        now: attachParams.now,
+      });
+    }
+  }
+
+  const items = await getItemsForNewProduct({
+    newProduct,
+    attachParams,
+    now: attachParams.now,
+    logger,
+    withPrepaid,
+    anchor,
+  });
+
+  return {
+    line_items: items,
+    due_at: nextCycleAt,
+  };
+};
+
+export const getNewProductPreview = async ({
+  branch,
+  attachParams,
+  logger,
+  config,
+  withPrepaid = false,
+}: {
+  branch: AttachBranch;
+  attachParams: AttachParams;
+  logger: any;
+  config: AttachConfig;
+  withPrepaid?: boolean;
+}) => {
+  const { org } = attachParams;
+  const newProduct = attachParamsToProduct({ attachParams });
+
+  const { sub: mergeSub, cusProduct: mergeCusProduct } = await getCustomerSub({
+    attachParams,
+  });
+
+  let trialEnds = undefined;
+
+  // Scenario where we update a current sub with new product (so no create sub)
+  let anchor = undefined;
+  if (mergeSub && !config.disableMerge) {
+    if (mergeCusProduct?.free_trial) {
+      if (isTrialing({ cusProduct: mergeCusProduct, now: attachParams.now })) {
+        trialEnds = mergeCusProduct.trial_ends_at;
+        attachParams.freeTrial = mergeCusProduct.free_trial;
+      } else {
+        attachParams.freeTrial = null;
+      }
+    }
+
+    anchor = mergeSub.billing_cycle_anchor * 1000;
+  } else if (org.config.anchor_start_of_month) {
+    anchor = getNextStartOfMonthUnix({
+      interval: BillingInterval.Month,
+      intervalCount: 1,
+    });
+  }
+
+  const items = await getItemsForNewProduct({
+    newProduct,
+    attachParams,
+    now: attachParams.now,
+    freeTrial: attachParams.freeTrial,
+    anchor,
+    logger,
+    withPrepaid,
+  });
+
+  const dueNextCycle = await getNextCycleItems({
+    newProduct,
+    attachParams,
+    anchor,
+    branch,
+    withPrepaid,
+    logger,
+    config,
+    trialEnds,
+  });
+
+  let options = getOptions({
+    prodItems: mapToProductItems({
+      prices: newProduct.prices,
+      entitlements: newProduct.entitlements,
+      features: attachParams.features,
+    }),
+    features: attachParams.features,
+    anchor,
+    now: attachParams.now || Date.now(),
+    freeTrial: attachParams.freeTrial,
+  });
+
+  const dueTodayAmt = items.reduce((acc, item) => {
+    return acc + (item.amount ?? 0);
+  }, 0);
+
+  return {
+    currency: attachParams.org.default_currency,
+    due_today: {
+      line_items: items,
+      total: dueTodayAmt,
+    },
+    due_next_cycle: dueNextCycle,
+    free_trial: attachParams.freeTrial,
+    options,
+  };
+};
