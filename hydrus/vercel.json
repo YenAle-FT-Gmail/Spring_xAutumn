@@ -1,0 +1,28 @@
+{
+    "framework": "nextjs",
+    "buildCommand": "npm run build",
+    "outputDirectory": ".next",
+    "installCommand": "npm install",
+    "devCommand": "npm run dev",
+    "env": {
+        "DATABASE_URL": "@database-url",
+        "NEXTAUTH_SECRET": "@nextauth-secret",
+        "NEXTAUTH_URL": "@nextauth-url",
+        "STRIPE_PUBLISHABLE_KEY": "@stripe-publishable-key",
+        "STRIPE_SECRET_KEY": "@stripe-secret-key",
+        "STRIPE_WEBHOOK_SECRET": "@stripe-webhook-secret",
+        "RESEND_API_KEY": "@resend-api-key",
+        "FROM_EMAIL": "@from-email"
+    },
+    "functions": {
+        "src/app/api/**/*.ts": {
+            "maxDuration": 30
+        }
+    },
+    "crons": [
+        {
+            "path": "/api/cron/check-churn",
+            "schedule": "0 9 * * *"
+        }
+    ]
+}

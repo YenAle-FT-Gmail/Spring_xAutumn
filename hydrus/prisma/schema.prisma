@@ -1,0 +1,211 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Authentication tables (NextAuth.js)
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  role          UserRole  @default(ADMIN)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+  apiKeys  ApiKey[]
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// Core business models
+enum UserRole {
+  ADMIN
+  USER
+}
+
+enum PricingModel {
+  STANDARD_SUBSCRIPTION
+  METERED_BILLING
+  PREPAID_CREDITS
+}
+
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
+enum Currency {
+  USD
+  EUR
+  GBP
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  TRIALING
+  UNPAID
+}
+
+model Organization {
+  id               String    @id @default(cuid())
+  name             String
+  slug             String    @unique
+  stripeAccountId  String?   @unique
+  webhookSecret    String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  products    Product[]
+  customers   Customer[]
+  apiKeys     ApiKey[]
+  webhookLogs WebhookLog[]
+}
+
+model Product {
+  id              String       @id @default(cuid())
+  organizationId  String
+  stripeProductId String       @unique
+  name            String
+  description     String?
+  pricingModel    PricingModel
+  active          Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  prices        Price[]
+  subscriptions Subscription[]
+}
+
+model Price {
+  id             String          @id @default(cuid())
+  productId      String
+  stripePriceId  String          @unique
+  amount         Int             // Amount in cents
+  currency       Currency        @default(USD)
+  interval       BillingInterval @default(MONTHLY)
+  intervalCount  Int             @default(1)
+  trialDays      Int?
+  requirePayment Boolean         @default(false) // For paid trials
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  product       Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+}
+
+model Customer {
+  id               String    @id @default(cuid())
+  organizationId   String
+  stripeCustomerId String    @unique
+  email            String
+  name             String?
+  metadata         Json?
+  lastSeenAt       DateTime? // For churn prevention
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  customerId           String
+  productId            String
+  priceId              String
+  stripeSubscriptionId String             @unique
+  status               SubscriptionStatus
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  trialStart           DateTime?
+  trialEnd             DateTime?
+  canceledAt           DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  metadata             Json?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  price    Price    @relation(fields: [priceId], references: [id], onDelete: Cascade)
+}
+
+model ApiKey {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  name           String
+  keyHash        String   @unique // Hashed version of the key
+  lastUsed       DateTime?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model WebhookLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  eventId        String   @unique // Stripe event ID
+  eventType      String
+  processed      Boolean  @default(false)
+  success        Boolean  @default(false)
+  errorMessage   String?
+  payload        Json
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, eventType])
+  @@index([processed, success])
+}
