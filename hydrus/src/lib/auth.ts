@@ -5,7 +5,7 @@ import EmailProvider from "next-auth/providers/email"
 import type { NextAuthConfig } from "next-auth"
 
 export const config = {
-    adapter: PrismaAdapter(db),
+    adapter: PrismaAdapter(db) as any,
     providers: [
         EmailProvider({
             server: {
@@ -29,7 +29,6 @@ export const config = {
             user: {
                 ...session.user,
                 id: user.id,
-                role: user.role,
             },
         }),
     },
